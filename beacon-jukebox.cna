@@ -1,0 +1,228 @@
+#
+# beacon-jukebox.cna - TACTICAL AUDIO NOTIFICATION ENGINE
+#
+# Instant audio alerts when beacons decide to et phone home 
+# ~~ silence is overrated during ops ~~
+# ~~ should've patched ettercap ~~
+#
+# Commands: /juk3_ch3ck, /juk3_k1ll, /juk3_c0nf1g
+# Load via Script Manager or punch in mem.
+#
+# ~d0m[1] \-/ waves
+#
+
+global('%juk3_conf');
+global('%sound_vectors');
+global('$conf_file');
+
+$conf_file = script_resource('jukebox_conf.dat');
+
+%sound_vectors = %(
+    "vector_alpha"   => "C:\\Windows\\Media\\tada.wav",
+    "vector_beta"    => "C:\\Windows\\Media\\Windows Exclamation.wav", 
+    "vector_gamma"   => "C:\\Windows\\Media\\exclamation.wav",
+    "vector_delta"   => "C:\\Windows\\Media\\chord.wav"
+);
+
+%juk3_conf["audio_enabled"] = $true;
+%juk3_conf["verbose_log"] = $true;
+%juk3_conf["fallback_beep"] = $true;
+
+sub play_beacon_sound {
+    if (!%juk3_conf["audio_enabled"]) {
+        return;
+    }
+    
+    local('$target_file $file_handle $strike_success $vector_name');
+    $strike_success = $false;
+    
+    fork({
+        try {
+            foreach $vector_name (keys(%sound_vectors)) {
+                $target_file = %sound_vectors[$vector_name];
+                $file_handle = [File new: $target_file];
+                
+                if ([$file_handle exists]) {
+                    $audio_input = [AudioSystem getAudioInputStream: $file_handle];
+                    $clip_handle = [AudioSystem getClip];
+                    
+                    [$clip_handle open: $audio_input];
+                    [$clip_handle start];
+                    
+                    while ([$clip_handle isRunning]) {
+                        sleep(100);
+                    }
+                    
+                    [$clip_handle close];
+                    [$audio_input close];
+                    $strike_success = $true;
+                    
+                    if (%juk3_conf["verbose_log"]) {
+                        elog("Audio vector deployed: " . $vector_name);
+                    }
+                    break;
+                }
+            }
+            
+            if (!$strike_success && %juk3_conf["fallback_beep"]) {
+                [Toolkit getDefaultToolkit] beep;
+                if (%juk3_conf["verbose_log"]) {
+                    elog("Fallback beep primitive executed");
+                }
+            }
+            
+        } catch $exception {
+            elog("Audio strike fault: " . [$exception getMessage]);
+            if (%juk3_conf["fallback_beep"]) {
+                [Toolkit getDefaultToolkit] beep;
+            }
+        }
+    });
+}
+
+on beacon_initial {
+    local('$host_id $user_ctx $proc_id $arch_info $internal_addr $external_addr');
+    
+    $host_id = beacon_info($1, "computer");
+    $user_ctx = beacon_info($1, "user");
+    $proc_id = beacon_info($1, "pid");
+    $arch_info = beacon_info($1, "arch");
+    $internal_addr = beacon_info($1, "internal");
+    $external_addr = beacon_info($1, "external");
+    
+    play_beacon_sound();
+    
+    elog("BEACON VECTOR ESTABLISHED");
+    elog("Target System: " . $host_id);
+    elog("Execution Context: " . $user_ctx);
+    elog("Process Handle: " . $proc_id);
+    elog("Architecture: " . $arch_info);
+    elog("Local Address: " . $internal_addr);
+    elog("Remote Address: " . $external_addr);
+    
+    show_message("BEACON ONLINE: " . $user_ctx . "@" . $host_id);
+}
+
+command juk3_ch3ck {
+    println("AUDIO VECTOR ENUMERATION");
+    
+    local('$operational_vector $total_vectors $available_vectors');
+    $total_vectors = 0;
+    $available_vectors = 0;
+    
+    foreach $vector_id (keys(%sound_vectors)) {
+        $total_vectors++;
+        $target_path = [File new: %sound_vectors[$vector_id]];
+        
+        if ([$target_path exists]) {
+            println("[+] VECTOR AVAILABLE: " . $vector_id . " -> " . %sound_vectors[$vector_id]);
+            $operational_vector = $vector_id;
+            $available_vectors++;
+        } else {
+            println("[-] VECTOR MISSING: " . $vector_id . " -> " . %sound_vectors[$vector_id]);
+        }
+    }
+    
+    println("\nVECTOR STATISTICS");
+    println("Total Vectors: " . $total_vectors);
+    println("Available Vectors: " . $available_vectors);
+    
+    if ($operational_vector) {
+        println("\nEXECUTING TEST STRIKE");
+        println("Testing primary vector: " . $operational_vector);
+        play_beacon_sound();
+        println("Test strike complete - verify audio output");
+    } else {
+        println("\nNO VECTORS AVAILABLE");
+        if (%juk3_conf["fallback_beep"]) {
+            println("Deploying emergency beep primitive");
+            [Toolkit getDefaultToolkit] beep;
+        }
+    }
+}
+
+command juk3_k1ll {
+    if (%juk3_conf["audio_enabled"]) {
+        %juk3_conf["audio_enabled"] = $false;
+        println("[AUDIO] Notification subsystem: DISABLED");
+        elog("Tactical audio notifications disabled by operator");
+    } else {
+        %juk3_conf["audio_enabled"] = $true;
+        println("[AUDIO] Notification subsystem: ENABLED");
+        elog("Tactical audio notifications enabled by operator");
+        play_beacon_sound();
+    }
+    
+    save_config();
+}
+
+command juk3_c0nf1g {
+    println("AUDIO SUBSYSTEM CONFIGURATION");
+    println("Current Settings:");
+    println("  Audio Enabled: " . %juk3_conf["audio_enabled"]);
+    println("  Verbose Logging: " . %juk3_conf["verbose_log"]);
+    println("  Fallback Beep: " . %juk3_conf["fallback_beep"]);
+    println("\nUse juk3_k1ll to toggle main audio state");
+}
+
+sub save_config {
+    local('$handle $key');
+    
+    $handle = openf(">" . $conf_file);
+    if ($handle) {
+        foreach $key (keys(%juk3_conf)) {
+            println($handle, $key . "=" . %juk3_conf[$key]);
+        }
+        closef($handle);
+    }
+}
+
+sub load_config {
+    local('$handle $line @parts');
+    
+    if (-exists $conf_file) {
+        $handle = openf($conf_file);
+        if ($handle) {
+            while $line (readln($handle)) {
+                $line = [$line trim];
+                if (strlen($line) > 0 && indexOf($line, "=") !is $null) {
+                    @parts = split("=", $line, 2);
+                    %juk3_conf[@parts[0]] = @parts[1];
+                }
+            }
+            closef($handle);
+        }
+    }
+}
+
+on ready {
+    load_config();
+    
+    elog("BEACON-JUKEBOX SYSTEM ONLINE");
+    elog("Tactical Audio Notification Engine");
+    elog("Available Commands:");
+    elog("  /juk3_ch3ck  - Enumerate and test audio vectors");
+    elog("  /juk3_k1ll   - Toggle notification subsystem");
+    elog("  /juk3_c0nf1g - Display current configuration");
+    elog("Audio Target: Windows Media Subsystem");
+    elog("Fallback Primitive: Java AWT Toolkit");
+    
+    local('$enumerated_vectors');
+    $enumerated_vectors = 0;
+    foreach $vector_test (keys(%sound_vectors)) {
+        $vector_check = [File new: %sound_vectors[$vector_test]];
+        if ([$vector_check exists]) {
+            $enumerated_vectors++;
+        }
+    }
+    
+    elog("Vector Enumeration: " . $enumerated_vectors . "/" . size(%sound_vectors) . " audio primitives available");
+    elog("Subsystem Status: " . iff(%juk3_conf["audio_enabled"], "OPERATIONAL", "DORMANT"));
+}
+
+# windows 95+ with java runtime - nt - w11 -> ok
+# hp-ux 11.x -> export JAVA_HOME=/opt/java1.8, ok
+# aix powerpc -> export LIBPATH=/usr/java8/jre/lib, ok
+# solaris sparc -> might need audio recompile, nok
+# irix mips -> definitely need dmedia patches, nok
+# plan9 -> /dev/audio, ye ure completely insane
