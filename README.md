@@ -12,7 +12,9 @@ usage
 -----
 
 /juk3_ch3ck - test your audio setup
+
 /juk3_k1ll - toggle notifications 
+
 /juk3_c0nf1g - show settings
 
 features
